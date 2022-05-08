@@ -12,13 +12,14 @@ echo "<========================>"
 export BUILDDIR=$(pwd)
 export LFS=$BUILDDIR/rootfs
 export ARCH=i686
-export SOURCEDIR=$LFS/sources
-export TOOLSDIR=$LFS/tools
+export SOURCEDIR=$BUILDDIR/sources
+export TOOLSDIR=$BUILDDIR/tools
 export LC_ALL=POSIX
-export LFS_TGT=$ARCH-linfinity-linux-gnu
+export LFS_TGT=$ARCH-linux-gnu
+export STD_TGT=linux-generic32
 export CONFIG_SITE=$LFS/usr/share/config.site
 export MAKEFLAGS='-j16 -s'
-export PATH=$PATH:$TOOLSDIR/bin
+export PATH=$PATH:$TOOLSDIR/bin:$TOOLSDIR/$LFS_TGT
 
 function downloadSources {
     mkdir $LFS
@@ -41,12 +42,13 @@ http://ftp.gnu.org/gnu/glibc/glibc-2.33.tar.xz
 http://ftp.gnu.org/gnu/gmp/gmp-6.2.1.tar.xz
 https://github.com/Mic92/iana-etc/releases/download/20210202/iana-etc-20210202.tar.gz
 https://ftp.gnu.org/gnu/inetutils/inetutils-2.1.tar.xz
-https://www.kernel.org/pub/linux/utils/net/iproute2/iproute2-5.10.0.tar.xz
 https://www.kernel.org/pub/linux/kernel/v5.x/linux-5.10.17.tar.xz
 https://ftp.gnu.org/gnu/mpc/mpc-1.2.1.tar.gz
 http://www.mpfr.org/mpfr-4.1.0/mpfr-4.1.0.tar.xz
 https://www.openssl.org/source/openssl-1.1.1j.tar.gz
 http://www.linuxfromscratch.org/patches/lfs/10.1/glibc-2.33-fhs-1.patch
+https://www.zlib.net/fossils/zlib-1.2.11.tar.gz
+https://ftp.openbsd.org/pub/OpenBSD/OpenSSH/portable/openssh-8.9p1.tar.gz
 EOF
     wget --input-file=$BUILDDIR/wget-list --continue --directory-prefix=$SOURCEDIR
 }
@@ -58,11 +60,11 @@ function buildCrossToolchain {
     mkdir -v build
     cd build
     echo "Configuring binutils..."
-    ../configure --prefix=$LFS/tools --with-sysroot=$LFS --target=$LFS_TGT --disable-nls --disable-werror > /dev/null
+    ../configure --prefix=$TOOLSDIR --with-sysroot=$LFS --target=$LFS_TGT --disable-nls --disable-werror > /dev/null
     echo "Building binutils..."
-    make -j1
+    make -j16 -s > /dev/null
     echo "Installing binutils..."
-    make -j1 install
+    make install > /dev/null
     echo "Extracting GCC source..."
     tar -xf $SOURCEDIR/gcc-10.2.0.tar.xz -C $SOURCEDIR
     tar -xf $SOURCEDIR/mpfr-4.1.0.tar.xz -C $SOURCEDIR/gcc-10.2.0
@@ -79,12 +81,12 @@ function buildCrossToolchain {
     esac
     mkdir -v build
     cd build
-    echo "Configuring GCC (Pass 1)..."
-    ../configure --target=$LFS_TGT --prefix=$LFS/tools --with-glibc-version=2.11 --with-sysroot=$LFS --with-newlib --without-headers --enable-initfini-array --disable-nls --disable-shared --disable-multilib --disable-decimal-float --disable-threads --disable-libatomic --disable-libgomp --disable-libquadmath --disable-libssp --disable-libvtv --disable-libstdcxx --enable-languages=c,c++ > /dev/null
-    echo "Building GCC (Pass 1)..."
-    make
-    echo "Installing GCC (Pass 1)..."
-    make install
+    echo "Configuring GCC..."
+    ../configure --target=$LFS_TGT --prefix=$TOOLSDIR --with-glibc-version=2.11 --with-sysroot=$LFS --with-newlib --without-headers --enable-initfini-array --disable-nls --disable-shared --disable-multilib --disable-decimal-float --disable-threads --disable-libatomic --disable-libgomp --disable-libquadmath --disable-libssp --disable-libvtv --disable-libstdcxx --enable-languages=c,c++ > /dev/null
+    echo "Building GCC..."
+    make -s > /dev/null
+    echo "Installing GCC..."
+    make install > /dev/null
     cd ..
     cat gcc/limitx.h gcc/glimits.h gcc/limity.h > `dirname $($LFS_TGT-gcc -print-libgcc-file-name)`/install-tools/include/limits.h
 }
@@ -100,9 +102,9 @@ function buildKernelHeaders {
             ;;
     esac
     echo "Cleaning Linux source..."
-    make mrproper
+    make mrproper > /dev/null
     echo "Building Linux kernel headers..."
-    make headers
+    make headers > /dev/null
     find usr/include -name '.*' -delete
     rm usr/include/Makefile
     cp -rv usr/include $LFS/usr
@@ -128,10 +130,12 @@ function buildGLibC {
     echo "Configuring Glibc..."
     ../configure --prefix=/usr --host=$LFS_TGT --build=$($SOURCEDIR/glibc-2.33/scripts/config.guess) --enable-kernel=3.2 --with-headers=$LFS/usr/include libc_cv_slibdir=/lib > /dev/null
     echo "Building Glibc..."
-    make
+    make -j16 > /dev/null
     echo "Installing Glibc..."
-    make DESTDIR=$LFS install
-    $LFS/tools/libexec/gcc/$LFS_TGT/10.2.0/install-tools/mkheaders
+    make DESTDIR=$LFS install > /dev/null
+    $TOOLSDIR/libexec/gcc/$LFS_TGT/10.2.0/install-tools/mkheaders > /dev/null
+    cd $SOURCEDIR/glibc-2.33/nscd
+    cp -v nscd.conf $LFS/etc/nscd.conf
 }
 
 function buildLibstdcpp {
@@ -139,11 +143,11 @@ function buildLibstdcpp {
     mkdir -v build
     cd build
     echo "Configuring libstdc++..."
-    ../configure --host=$LFS_TGT --build=$($SOURCEDIR/gcc-10.2.0/config.guess) --prefix=/usr --disable-multilib --disable-nls --disable-libstdcxx-pch --with-gxx-include-dir=/tools/$LFS_TGT/include/c++/10.2.0 > /dev/null
+    ../configure --host=$LFS_TGT --build=$($SOURCEDIR/gcc-10.2.0/config.guess) --prefix=/usr --disable-multilib --disable-nls --disable-libstdcxx-pch --with-gxx-include-dir=/usr/include/c++/10.2.0 > /dev/null
     echo "Building libstdc++..."
-    make
+    make -j16 > /dev/null
     echo "Installing libstdc++..."
-    make DESTDIR=$LFS install
+    make DESTDIR=$LFS install > /dev/null
 }
 
 function buildBusybox {
@@ -151,43 +155,65 @@ function buildBusybox {
     tar -xf $SOURCEDIR/busybox-1.33.1.tar.bz2 -C $SOURCEDIR
     cd $SOURCEDIR/busybox-1.33.1
     echo "Configuring BusyBox..."
-    make CROSS_COMPILE="${LFS_TGT}-" defconfig
+    make CROSS_COMPILE="${LFS_TGT}-" defconfig > /dev/null
     echo "Building BusyBox..."
-    make CROSS_COMPILE="${LFS_TGT}-"
+    make CROSS_COMPILE="${LFS_TGT}-" -j16 > /dev/null
     echo "Installing BusyBox..."
-    make CROSS_COMPILE="${LFS_TGT}-" CONFIG_PREFIX="$LFS" install
-    cp -v examples/depmod.pl $LFS/tools/bin
-    chmod 755 $LFS/tools/bin/depmod.pl
+    make CROSS_COMPILE="${LFS_TGT}-" CONFIG_PREFIX="$LFS/" install > /dev/null
+    cp -v examples/depmod.pl $TOOLSDIR/bin
+    chmod 755 $TOOLSDIR/bin/depmod.pl
+}
+
+function buildIanaEtc {
+    tar -xf $SOURCEDIR/iana-etc-20210202.tar.gz -C $SOURCEDIR
+    cd $SOURCEDIR/iana-etc-20210202
+    cp services protocols $LFS/etc
 }
 
 function buildInetutils {
     tar -xf $SOURCEDIR/inetutils-2.1.tar.xz -C $SOURCEDIR
     cd $SOURCEDIR/inetutils-2.1
-    ./configure --host=$LFS_TGT --build=$($SOURCEDIR/binutils-2.36.1/config.guess) --prefix=/usr --localstatedir=/var --disable-logger --disable-whois --disable-rcp --disable-rexec --disable-rlogin --disable-rsh --disable-servers
+    CC="${LFS_TGT}-gcc" CXX="${LFS_TGT}-g++" AR="${LFS_TGT}-ar" AS="${LFS_TGT}-as" RANLIB="${LFS_TGT}-ranlib" LD="${LFS_TGT}-ld" STRIP="${LFS_TGT}-strip" CFLAGS="-fPIE -march=${ARCH}" CXXFLAGS="-fPIE -march=${ARCH}" ./configure --host=$LFS_TGT --build=$($SOURCEDIR/binutils-2.36.1/config.guess) --prefix=/usr --localstatedir=/var --disable-logger --disable-whois --disable-rcp --disable-rexec --disable-rlogin --disable-rsh --disable-servers > /dev/null
     sed -i 's/PATH_PROCNET_DEV/"\/proc\/net\/dev"/g' ifconfig/system/linux.c
-    make
-    make DESTDIR=$LFS install
+    make ARCH=$ARCH CROSS_COMPILE="${LFS_TGT}-" -j16 > /dev/null
+    make ARCH=$ARCH CROSS_COMPILE="${LFS_TGT}-" DESTDIR=$LFS install > /dev/null
     mv -v $LFS/usr/bin/{hostname,ping,ping6,traceroute} $LFS/bin
     mv -v $LFS/usr/bin/ifconfig $LFS/sbin
 }
 
-function buildIPRoute2 {
-    tar -xf $SOURCEDIR/iproute2-5.10.0.tar.xz -C $SOURCEDIR
-    cd $SOURCEDIR/iproute2-5.10.0
-    sed -i /ARPD/d Makefile
-    rm -fv man/man8/arpd.8
-    sed -i 's/.m_ipt.o//' tc/Makefile
-    CC="${LFS_TGT}-gcc" CXX="${LFS_TGT}-g++" AR="${LFS_TGT}-ar" AS="${LFS_TGT}-as" RANLIB="${LFS_TGT}-ranlib" LD="${LFS_TGT}-ld" STRIP="${LFS_TGT}-strip" CFLAGS="-fPIE" CXXFLAGS="-fPIE" make
-    CC="${LFS_TGT}-gcc" CXX="${LFS_TGT}-g++" AR="${LFS_TGT}-ar" AS="${LFS_TGT}-as" RANLIB="${LFS_TGT}-ranlib" LD="${LFS_TGT}-ld" STRIP="${LFS_TGT}-strip" CFLAGS="-fPIE" CXXFLAGS="-fPIE" make DESTDIR=$LFS install
+function buildZlib {
+    echo "Extracting Zlib source..."
+    tar -xf $SOURCEDIR/zlib-1.2.11.tar.gz -C $SOURCEDIR
+    cd $SOURCEDIR/zlib-1.2.11
+    echo "Building Zlib..."
+    CC="${LFS_TGT}-gcc" CXX="${LFS_TGT}-g++" AR="${LFS_TGT}-ar" AS="${LFS_TGT}-as" RANLIB="${LFS_TGT}-ranlib" LD="${LFS_TGT}-ld" STRIP="${LFS_TGT}-strip" CFLAGS="-fPIE -march=${ARCH}" CXXFLAGS="-fPIE -march=${ARCH}" ./configure --prefix=$LFS/usr > /dev/null
+    make ARCH=$ARCH CROSS_COMPILE="${LFS_TGT}-" -j16 > /dev/null
+    make ARCH=$ARCH CROSS_COMPILE="${LFS_TGT}-" install > /dev/null
+    mv -v $LFS/usr/lib/libz.so.* $LFS/lib
+    ln -sfv ../../lib/libz.so.1 $LFS/usr/lib/libz.so
 }
 
 function buildOpenSSL {
+    echo "Extracting OpenSSL source..."
     tar -xf $SOURCEDIR/openssl-1.1.1j.tar.gz -C $SOURCEDIR
     cd $SOURCEDIR/openssl-1.1.1j
-    ./config --prefix=/usr --openssldir=/etc/ssl --libdir=lib shared zlib-dynamic
-    CC="${LFS_TGT}-gcc" CXX="${LFS_TGT}-g++" AR="${LFS_TGT}-ar" AS="${LFS_TGT}-as" RANLIB="${LFS_TGT}-ranlib" LD="${LFS_TGT}-ld" STRIP="${LFS_TGT}-strip" make
-    sed -i '/INSTALL_LIBS/s/libcrypto.a libssl.a//' Makefile
-    CC="${LFS_TGT}-gcc" CXX="${LFS_TGT}-g++" AR="${LFS_TGT}-ar" AS="${LFS_TGT}-as" RANLIB="${LFS_TGT}-ranlib" LD="${LFS_TGT}-ld" STRIP="${LFS_TGT}-strip" make DESTDIR=$LFS install
+    echo "Building OpenSSL..."
+    ./Configure --prefix=$LFS/usr --cross-compile-prefix="${LFS_TGT}-" --openssldir=$LFS/etc/ssl -I"${LFS}/usr/include" -L"${LFS}/usr/lib" --libdir=$LFS/lib shared zlib-dynamic -m32 $STD_TGT > /dev/null
+    make clean > /dev/null
+    make -j16 > /dev/null
+    make install > /dev/null
+}
+
+function buildOpenSSH {
+    echo "Extracting OpenSSH source..."
+    tar -xf $SOURCEDIR/openssh-8.9p1.tar.gz -C $SOURCEDIR
+    cd $SOURCEDIR/openssh-8.9p1
+    echo "Building OpenSSH..."
+    CC="${LFS_TGT}-gcc" CXX="${LFS_TGT}-g++" AR="${LFS_TGT}-ar" AS="${LFS_TGT}-as" RANLIB="${LFS_TGT}-ranlib" LD="${LFS_TGT}-ld" STRIP="${LFS_TGT}-strip" CFLAGS="-fPIE -march=${ARCH}" CXXFLAGS="-fPIE -march=${ARCH}" ./configure --host=$LFS_TGT --build=$($SOURCEDIR/binutils-2.36.1/config.guess) --prefix=/usr --sysconfdir=/etc/ssh --with-privsep-path=/var/lib/sshd --with-default-path=/usr/bin --with-superuser-path=/usr/sbin:/usr/bin --with-pid-dir=/run > /dev/null
+    sed -i 's/PATH_PROCNET_DEV/"\/proc\/net\/dev"/g' ifconfig/system/linux.c
+    make clean
+    make ARCH=$ARCH CROSS_COMPILE="${LFS_TGT}-" -j16 > /dev/null
+    make DESTDIR=$LFS install > /dev/null
 }
 
 function configureSystem {
@@ -195,7 +221,7 @@ function configureSystem {
     mkdir -pv $LFS/{dev,proc,sys,run}
     mknod -m 600 $LFS/dev/console c 5 1
     mknod -m 666 $LFS/dev/null c 1 3
-    chown -R root:root $LFS/{usr,lib,var,etc,bin,sbin,tools,dev,proc,sys,run}
+    chown -R root:root $LFS/{usr,lib,var,etc,bin,sbin,dev,proc,sys,run}
     case $(uname -m) in
         x86_64)
             chown -R root:root $LFS/lib64
@@ -215,18 +241,26 @@ function configureSystem {
 #!/bin/ash
 echo "Linfinity Linux Setup"
 echo "---------------------"
-export MAKEFLAGS="-j16 -s"
 mkdir -pv /boot
-mkdir -pv /opt/lib
-mkdir -pv /etc/{opt,sysconfig}
+mkdir -pv /etc/sysconfig
 mkdir -pv /lib/firmware
 mkdir -pv /media/cdrom
-mkdir -pv /usr/{local,share,bin,lib,sbin,src}
-mkdir -pv /usr/local/{share,bin,lib,sbin,src}
-mkdir -pv /usr/local/share/{color,misc,terminfo}
-mkdir -pv /usr/share/{color,misc,terminfo}
-mkdir -pv /var/{cache,local,log,mail,opt,spool}
-mkdir -pv /var/lib/{color,misc,locate}
+mkdir -pv /usr/local
+mkdir -pv /usr/share
+mkdir -pv /usr/bin
+mkdir -pv /usr/lib
+mkdir -pv /usr/sbin
+mkdir -pv /usr/src
+mkdir -pv /usr/local/share
+mkdir -pv /usr/local/bin
+mkdir -pv /usr/local/lib
+mkdir -pv /usr/local/sbin
+mkdir -pv /usr/local/src
+mkdir -pv /usr/local/share/terminfo
+mkdir -pv /usr/share/terminfo
+mkdir -pv /var/cache
+mkdir -pv /var/local
+mkdir -pv /var/log
 ln -sfv /run /var/run
 ln -sfv /run/lock /var/lock
 install -dv -m 0750 /root
@@ -236,19 +270,17 @@ echo "127.0.0.1 localhost linfinity" > /etc/hosts
 cat > /etc/passwd << EOT
 root::0:0:root:/root:/bin/ash
 nobody::99:99:nobody:/dev/null:/bin/false
+sshd::50:50:sshd PrivSep:/var/lib/sshd:/bin/false
 EOT
 cat > /etc/group << EOT
 root:x:0:
 bin:x:1:daemon
 sys:x:2:
 kmem:x:3:
-tape:x:4:
 tty:x:5:
 daemon:x:6:
-floppy:x:7:
 disk:x:8:
 lp:x:9:
-dialout:x:10:
 audio:x:11:
 video:x:12:
 utmp:x:13:
@@ -257,7 +289,7 @@ cdrom:x:15:
 adm:x:16:
 messagebus:x:18:
 input:x:24:
-mail:x:34:
+sshd:x:50:
 kvm:x:61:
 uuidd:x:80:
 wheel:x:97:
@@ -272,14 +304,17 @@ touch /var/log/wtmp
 chgrp -v utmp /var/log/lastlog
 chmod -v 664  /var/log/lastlog
 chmod -v 600  /var/log/btmp
-cd /sources
-tar -xf iana-etc-20210202.tar.gz
-cd iana-etc-20210202
-cp services protocols /etc
-cd /sources/glibc-2.33
 touch /etc/ld.so.conf
-cp -v nscd/nscd.conf /etc/nscd.conf
 mkdir -pv /var/cache/nscd
+cat > /etc/network.conf << EOT
+NETWORKING=yes
+EOT
+mkdir -pv /etc/network.d
+cat > /etc/network.d/interface.eth0 << EOT
+INTERFACE=eth0
+DHCP=yes
+EOT
+
 cat > /etc/nsswitch.conf << EOT
 # Begin /etc/nsswitch.conf
 
@@ -327,8 +362,7 @@ hwrandom root:root 0660
 
 # console does already exist; therefore ownership has to
 # be changed with command
-console root:tty 0600 @mkdir -pm 755 fd && cd fd && for x
- ↪in 0 1 2 3 ; do ln -sf /proc/self/fd/$x $x; done
+console root:tty 0600 @mkdir -pm 755 fd && cd fd && for x in 0 1 2 3 ; do ln -sf /proc/self/fd/$x $x; done
 
 kmem    root:root 0640
 mem     root:root 0640
@@ -421,9 +455,24 @@ chmod -v 664 /var/log/lastlog
 rm -rf /tmp/*
 mkdir -pv /etc/rc.d
 cat > /etc/rc.d/startup << EOT
-clear
+#clear
 EOT
+
+cd /etc/sysconfig/
+#cat > ifconfig.eth0 << EOT
+#ONBOOT=yes
+#IFACE=eth0
+#GATEWAY=192.168.1.1
+#PREFIX=24
+#BROADCAST=192.168.1.255
+#EOT
 chmod 4755 /bin/busybox
+
+install  -v -m700 -d /var/lib/sshd
+chown -v root:sys /var/lib/sshd
+
+cd /etc/ssh
+ssh-keygen -A
 EOF
     export PATH=$PATH:/bin:/sbin:/usr/bin:/usr/sbin
     export HOME=/root
@@ -461,69 +510,66 @@ function buildKernel {
             ;;
     esac
     echo "Cleaning Linux source..."
-    make mrproper
+    make mrproper > /dev/null
     echo "Configuring Linux kernel..."
-    make ARCH=$ARCH CROSS_COMPILE=${LFS_TGT}- defconfig
-    make ARCH=$ARCH CROSS_COMPILE=${LFS_TGT}- menuconfig
+    make ARCH=$ARCH CROSS_COMPILE=${LFS_TGT}- defconfig > /dev/null
+    cp $BUILDDIR/kernelconfig $SOURCEDIR/linux-5.10.17/.config
     echo "Building Linux kernel..."
-    make ARCH=$ARCH CROSS_COMPILE=${LFS_TGT}-
-    make ARCH=$ARCH CROSS_COMPILE=${LFS_TGT}- INSTALL_MOD_PATH=$LFS modules_install
+    make ARCH=$ARCH CROSS_COMPILE=${LFS_TGT}- -j16 > /dev/null
+    make ARCH=$ARCH CROSS_COMPILE=${LFS_TGT}- INSTALL_MOD_PATH=$LFS modules_install > /dev/null
     find usr/include -name '.*' -delete
     rm usr/include/Makefile
     cp -rv usr/include $LFS/usr
     cp -v arch/x86/boot/bzImage $LFS/boot/vmlinuz-5.10.17
     cp -v System.map $LFS/boot/System.map-5.10.17
     cp -v .config $LFS/boot/config-5.10.17
-    $LFS/tools/bin/depmod.pl -F $LFS/boot/System.map-5.10.17 -b $LFS/lib/modules/5.10.17
+    $TOOLSDIR/bin/depmod.pl -F $LFS/boot/System.map-5.10.17 -b $LFS/lib/modules/5.10.17 > /dev/null
     ARCH=$ARCHX
 }
 
 function installBootscripts {
-    tar -xf $SOURCEDIR/clfs-embedded-bootscripts-1.0-pre5.tar.bz2 -C $SOURCEDIR
-    cd $SOURCEDIR/clfs-embedded-bootscripts-1.0-pre5
+    cd $BUILDDIR/bootscripts
     mkdir -pv $LFS/etc/rc.d/init.d
     mkdir -pv $LFS/etc/rc.d/start
     mkdir -pv $LFS/etc/rc.d/stop
     mkdir -pv $LFS/etc/init.d
-    make DESTDIR=$LFS install-bootscripts
+    make DESTDIR=$LFS install-bootscripts > /dev/null
     ln -sv ../rc.d/startup $LFS/etc/init.d/rcS
 }
 
-function cleanup {
-    echo "Cleaning up..."
-    rm -rf $BUILDDIR/wget-list
-    rm -rf $LFS/sources
-    rm -rf $LFS/tools
-    rm -rf $LFS/usr/bin/man
-    rm -rf $LFS/usr/share/man
-    rm -rf $LFS/usr/local/share/man
-    rm -rf $LFS/usr/local/share/doc
-    rm -rf $LFS/usr/share/doc
-    rm -rf $LFS/usr/include
-    rm -rf $LFS/usr/local/share/locale
-    rm -rf $LFS/usr/share/i18n
-    rm -rf $LFS/usr/share/locale
-    rm -rf $LFS/usr/bin/locale
-    rm -rf $LFS/usr/bin/localedef
-    rm -rf $LFS/usr/bin/cc
-    rm -rf $LFS/usr/bin/gcc
-    rm -rf $LFS/usr/bin/c++
-    rm -rf $LFS/usr/bin/cpp
-    rm -rf $LFS/usr/bin/g++
-    rm -rf $LFS/usr/bin/gcc-*
-    rm -rf $LFS/usr/bin/gcov-*
-    rm -rf $LFS/usr/lib/*.a
-    rm -rf $LFS/usr/lib/*.la
-    rm -rf $LFS/usr/lib/gcc
-    rm -rf $LFS/usr/$LFS_TGT
-    rm -rf $LFS/usr/bin/${LFS_TGT}*
-    rm -rf $LFS/usr/libexec/gcc
-}
-
 function createDiskImage {
+    mkdir -pv $BUILDDIR/imgroot
+    cp -r $LFS/* $BUILDDIR/imgroot/
+    rm -rf $BUILDDIR/imgroot/tools
+    rm -rf $BUILDDIR/imgroot/usr/bin/man
+    rm -rf $BUILDDIR/imgroot/usr/share/man
+    rm -rf $BUILDDIR/imgroot/usr/local/share/man
+    rm -rf $BUILDDIR/imgroot/usr/local/share/doc
+    rm -rf $BUILDDIR/imgroot/usr/share/doc
+    rm -rf $BUILDDIR/imgroot/usr/include
+    rm -rf $BUILDDIR/imgroot/usr/local/share/locale
+    rm -rf $BUILDDIR/imgroot/usr/share/i18n
+    rm -rf $BUILDDIR/imgroot/usr/share/locale
+    rm -rf $BUILDDIR/imgroot/usr/bin/locale
+    rm -rf $BUILDDIR/imgroot/usr/bin/localedef
+    rm -rf $BUILDDIR/imgroot/usr/bin/cc
+    rm -rf $BUILDDIR/imgroot/usr/bin/gcc
+    rm -rf $BUILDDIR/imgroot/usr/bin/c++
+    rm -rf $BUILDDIR/imgroot/usr/bin/cpp
+    rm -rf $BUILDDIR/imgroot/usr/bin/g++
+    rm -rf $BUILDDIR/imgroot/usr/bin/gcc-*
+    rm -rf $BUILDDIR/imgroot/usr/bin/gcov-*
+    rm -rf $BUILDDIR/imgroot/usr/lib/*.a
+    rm -rf $BUILDDIR/imgroot/usr/lib/*.la
+    rm -rf $BUILDDIR/imgroot/usr/lib/gcc
+    rm -rf $BUILDDIR/imgroot/usr/$LFS_TGT
+    rm -rf $BUILDDIR/imgroot/usr/bin/${LFS_TGT}*
+    rm -rf $BUILDDIR/imgroot/usr/libexec/gcc
+    rm -rf $BUILDDIR/imgroot/lib/*.a
+    rm -rf $BUILDDIR/imgroot/usr/lib/*.a
     cd $BUILDDIR
     echo "Creating disk image..."
-    dd if=/dev/zero of=$BUILDDIR/linfinity.linux.img bs=1M count=64 > /dev/null
+    dd if=/dev/zero of=$BUILDDIR/linfinity.linux.img bs=1M count=96 > /dev/null
     echo "Mounting image..."
     lodev=$(losetup -f)
     losetup $lodev $BUILDDIR/linfinity.linux.img
@@ -556,7 +602,7 @@ menuentry "Linfinity Linux" {
 }
 EOF
     echo "Copying files..."
-    cp -r $LFS/* $BUILDDIR/imgdir/
+    cp -vr $BUILDDIR/imgroot/* $BUILDDIR/imgdir/
     echo "Installing bootloader..."
     grub_tgt=i386-pc
     grub-install --target=$grub_tgt --root-directory=$BUILDDIR/imgdir $lodev
@@ -565,6 +611,7 @@ EOF
     losetup -d $lodev
     echo "Cleaning up..."
     rm -rf $BUILDDIR/imgdir
+    rm -rf $BUILDDIR/imgroot
     echo "Linfinity Linux bootable image linfinity.linux.img created successfully! Have a nice day :)"
 }
 
@@ -585,20 +632,39 @@ EOF
 
 function all {
     downloadSources
+    start=`date +%s`
     buildCrossToolchain
     buildKernelHeaders
     buildGLibC
     buildLibstdcpp
     buildBusybox
+    buildIanaEtc
     buildInetutils
-    buildIPRoute2
+    buildZlib
     buildOpenSSL
+    buildOpenSSH
     configureSystem
     installBootscripts
     buildKernel
-    #cleanup
-    #createDiskImage
+    createDiskImage
+    end=`date +%s`
+    runtime=$((end-start))
+    echo "BUILD TIME: ${runtime}"
     #createISO
+}
+
+function run {
+    qemu-system-i386 -hda linfinity.linux.img -netdev user,id=mynet0 -device e1000,netdev=mynet0
+}
+
+function nuclear {
+    rm -rf sources
+    rm -rf rootfs
+    rm -rf tools
+    rm -rf $BUILDDIR/imgroot
+    rm -rf build
+    rm -rf wget-list
+    rm -rf linfinity.linux.img
 }
 
 if [ $# -eq 1 ]
